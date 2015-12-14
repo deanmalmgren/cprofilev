@@ -34,17 +34,33 @@ STATS_TEMPLATE = """\
 <html>
     <head>
         <title>{{ title }} | cProfile Results</title>
+        <link rel="stylesheet" type="text/css" href="https://cdnjs.cloudflare.com/ajax/libs/twitter-bootstrap/3.3.6/css/bootstrap.min.css">
+        <link rel="stylesheet" type="text/css" href="https://cdnjs.cloudflare.com/ajax/libs/datatables/1.10.10/css/dataTables.bootstrap.min.css">
     </head>
     <body>
-        <pre>{{ !stats }}</pre>
+        <div class="container">
+            <pre>{{ !stats_header }}</pre>
+            <table class="table table-striped">{{ !stats_table }}</table>
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/2.1.4/jquery.min.js"></script>
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/twitter-bootstrap/3.3.6/js/bootstrap.min.js"></script>
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/datatables/1.10.10/js/jquery.dataTables.min.js"></script>
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/datatables/1.10.10/js/dataTables.bootstrap.min.js"></script>
+            <script>
+                $(document).ready(function(){
+                    $('table').DataTable({
+                        "order": [[3, "desc"]]
+                    });
+                });
+            </script>
 
-        % if callers:
-            <h2>Called By:</h2>
-            <pre>{{ !callers }}</pre>
+            % if callers:
+                <h2>Called By:</h2>
+                <pre>{{ !callers }}</pre>
 
-        % if callees:
-            <h2>Called:</h2>
-            <pre>{{ !callees }}</pre>
+            % if callees:
+                <h2>Called:</h2>
+                <pre>{{ !callees }}</pre>
+        </div> <!-- .container -->
     </body>
 </html>"""
 
@@ -57,14 +73,6 @@ class Stats(object):
     """Wrapper around pstats.Stats class."""
 
     IGNORE_FUNC_NAMES = ['function', '']
-    DEFAULT_SORT_ARG = 'cumulative'
-    SORT_ARGS = {
-        'ncalls': 'calls',
-        'tottime': 'time',
-        'cumtime': 'cumulative',
-        'filename': 'module',
-        'lineno': 'nfl',
-    }
 
     STATS_LINE_REGEX = r'(.*)\((.*)\)$'
     HEADER_LINE_REGEX = r'ncalls|tottime|cumtime'
@@ -87,15 +95,6 @@ class Stats(object):
 
     @classmethod
     def process_line(cls, line):
-        # Format header lines (such that clicking on a column header sorts by
-        # that column).
-        if re.search(cls.HEADER_LINE_REGEX, line):
-            for key, val in cls.SORT_ARGS.items():
-                url_link = bottle.template(
-                    "<a href='{{ url }}'>{{ key }}</a>",
-                    url=cls.get_updated_href(SORT_KEY, val),
-                    key=key)
-                line = line.replace(key, url_link)
         # Format stat lines (such that clicking on the function name drills into
         # the function call).
         match = re.search(cls.STATS_LINE_REGEX, line)
@@ -133,11 +132,41 @@ class Stats(object):
         self.stats.print_callees(func_name)
         return self
 
-    def sort(self, sort=''):
-        sort = sort or self.DEFAULT_SORT_ARG
-        self.stats.sort_stats(sort)
-        return self
+    def get_stats_header(self, stats_str):
+        header = ''
+        for line in stats_str.splitlines():
+            if re.search(self.HEADER_LINE_REGEX, line):
+                break
+            header += line + '\n'
+        return header
 
+    def iter_stats_table_row(self, stats_str):
+        # rows in the stats table are formatted in a really simple way. the
+        # first 5 columns are separated by whitespace. the fifth column extends
+        # to the end of the line
+        in_table = False
+        for line in stats_str.splitlines():
+            if re.search(self.HEADER_LINE_REGEX, line):
+                in_table = True
+            cols = line.split()
+            if in_table and cols:
+                row = cols[:5] + [' '.join(cols[5:])]
+                yield row
+
+    def format_stats_table(self, stats_str):
+        table_dom = []
+        col_el = 'th'
+        for row in self.iter_stats_table_row(stats_str):
+            row_dom = '<tr>'
+            for col in row:
+                row_dom += '<%s>%s</%s>' % (col_el, col, col_el)
+            row += '</tr>'
+            col_el = 'td'
+            table_dom.append(row_dom)
+        table_dom[0] = '<thead>' + table_dom[0] + '</thead>'
+        table_dom[1] = '<tbody>' + table_dom[1]
+        table_dom[-1] = table_dom[-1] + '</tbody>'
+        return '\n'.join(table_dom)
 
 class CProfileV(object):
     def __init__(self, profile, title, address='127.0.0.1', port=4000):
@@ -154,14 +183,14 @@ class CProfileV(object):
         self.stats = Stats(self.profile)
 
         func_name = bottle.request.query.get(FUNC_NAME_KEY) or ''
-        sort = bottle.request.query.get(SORT_KEY) or ''
 
-        self.stats.sort(sort)
         callers = self.stats.show_callers(func_name).read() if func_name else ''
         callees = self.stats.show_callees(func_name).read() if func_name else ''
+        stats_str =  self.stats.show(func_name).read()
         data = {
             'title': self.title,
-            'stats': self.stats.sort(sort).show(func_name).read(),
+            'stats_header': self.stats.get_stats_header(stats_str),
+            'stats_table': self.stats.format_stats_table(stats_str),
             'callers': callers,
             'callees': callees,
         }
@@ -210,7 +239,7 @@ def main():
     if len(args.remainder) < 0:
         parser.print_help()
         sys.exit(2)
-        
+
     # Note: The info message is sent to stderr to keep stdout clean in case
     # the profiled script writes some output to stdout
     sys.stderr.write(info + "\n")

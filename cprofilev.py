@@ -47,7 +47,9 @@ STATS_TEMPLATE = """\
             <script src="https://cdnjs.cloudflare.com/ajax/libs/datatables/1.10.10/js/dataTables.bootstrap.min.js"></script>
             <script>
                 $(document).ready(function(){
-                    $('table').DataTable();
+                    $('table').DataTable({
+                        "order": [[3, "desc"]]
+                    });
                 });
             </script>
 
@@ -71,14 +73,6 @@ class Stats(object):
     """Wrapper around pstats.Stats class."""
 
     IGNORE_FUNC_NAMES = ['function', '']
-    DEFAULT_SORT_ARG = 'cumulative'
-    SORT_ARGS = {
-        'ncalls': 'calls',
-        'tottime': 'time',
-        'cumtime': 'cumulative',
-        'filename': 'module',
-        'lineno': 'nfl',
-    }
 
     STATS_LINE_REGEX = r'(.*)\((.*)\)$'
     HEADER_LINE_REGEX = r'ncalls|tottime|cumtime'
@@ -138,11 +132,6 @@ class Stats(object):
         self.stats.print_callees(func_name)
         return self
 
-    def sort(self, sort=''):
-        sort = sort or self.DEFAULT_SORT_ARG
-        self.stats.sort_stats(sort)
-        return self
-
     def get_stats_header(self, stats_str):
         header = ''
         for line in stats_str.splitlines():
@@ -194,17 +183,14 @@ class CProfileV(object):
         self.stats = Stats(self.profile)
 
         func_name = bottle.request.query.get(FUNC_NAME_KEY) or ''
-        sort = bottle.request.query.get(SORT_KEY) or ''
 
-        self.stats.sort(sort)
         callers = self.stats.show_callers(func_name).read() if func_name else ''
         callees = self.stats.show_callees(func_name).read() if func_name else ''
-        stats =  self.stats.sort(sort).show(func_name).read()
+        stats_str =  self.stats.show(func_name).read()
         data = {
             'title': self.title,
-            'stats': stats,
-            'stats_header': self.stats.get_stats_header(stats),
-            'stats_table': self.stats.format_stats_table(stats),
+            'stats_header': self.stats.get_stats_header(stats_str),
+            'stats_table': self.stats.format_stats_table(stats_str),
             'callers': callers,
             'callees': callees,
         }
